@@ -1,0 +1,52 @@
+#cloud-config
+# Bootstrap for the RAN/UE simulator host (UERANSIM gNodeB + UE) on Docker.
+# Rendered by Terraform templatefile(): ${ella_core_private_ip} is substituted
+# with ella-core's private VPC IP so the gNodeB targets the correct AMF/N2.
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - iproute2
+  - git
+
+write_files:
+  # Persist the ella-core private IP for scripts / debugging on the host.
+  - path: /opt/ella-sim/ella_core_ip.env
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ELLA_CORE_IP=${ella_core_private_ip}
+
+runcmd:
+  # Install Docker Engine & Compose plugin
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - apt-get update -y
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # UERANSIM needs the TUN device for the UE data-plane interface (uesimtun0)
+  - mkdir -p /dev/net
+  - sh -c '[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200'
+  - chmod 0666 /dev/net/tun
+
+  # Fetch the project (public repo) and stage the simulator stack
+  - git clone --depth 1 https://github.com/cloudguru-bb/ella-kiro-project.git /opt/ella-sim/src
+  - mkdir -p /opt/ella-sim/sim
+  - cp -r /opt/ella-sim/src/sim/* /opt/ella-sim/sim/
+
+  # Determine this host's primary private IP (used as the gNodeB link / N3 GTP-U source)
+  - sh -c 'echo "GNB_IP=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1)" >> /opt/ella-sim/ella_core_ip.env'
+
+  # Render UERANSIM configs from templates with the two IPs
+  - sh -c '. /opt/ella-sim/ella_core_ip.env; sed -e "s/__ELLA_CORE_IP__/$ELLA_CORE_IP/g" -e "s/__GNB_IP__/$GNB_IP/g" /opt/ella-sim/sim/gnb.yaml.tmpl > /opt/ella-sim/sim/gnb.yaml'
+  - sh -c '. /opt/ella-sim/ella_core_ip.env; sed -e "s/__GNB_IP__/$GNB_IP/g" /opt/ella-sim/sim/ue.yaml.tmpl > /opt/ella-sim/sim/ue.yaml'
+
+  # Bring up the gNodeB (the UE container is started on demand — see sim/README.md)
+  - sh -c 'cd /opt/ella-sim/sim && docker compose up -d gnb'

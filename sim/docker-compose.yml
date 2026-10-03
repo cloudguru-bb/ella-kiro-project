@@ -1,0 +1,35 @@
+# UERANSIM gNodeB + UE simulator stack.
+# Runs on the dedicated simulator EC2 host (see infra/cloud-init-sim.yaml).
+# Connects to ella-core over the private VPC address on N2 (SCTP 38412) and
+# N3 (GTP-U 2152).
+#
+# The gnb.yaml / ue.yaml files are rendered from the *.tmpl templates at boot
+# with the correct ella-core IP (__ELLA_CORE_IP__) and this host's IP (__GNB_IP__).
+services:
+  gnb:
+    image: gradiant/ueransim:3.2.6
+    container_name: ueransim-gnb
+    # Start the gNodeB directly against our mounted config.
+    command: ["gnb", "-c", "/ueransim/config/gnb.yaml"]
+    restart: unless-stopped
+    network_mode: host # host networking so SCTP/GTP-U use the instance's private IP
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./gnb.yaml:/ueransim/config/gnb.yaml:ro
+
+  # The UE is launched on demand (needs the gNodeB registered first).
+  # Start it with:  docker compose run --rm ue
+  ue:
+    image: gradiant/ueransim:3.2.6
+    container_name: ueransim-ue
+    command: ["ue", "-c", "/ueransim/config/ue.yaml"]
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./ue.yaml:/ueransim/config/ue.yaml:ro
+    profiles:
+      - manual # excluded from `up`; run explicitly

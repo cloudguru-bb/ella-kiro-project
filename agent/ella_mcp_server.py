@@ -516,6 +516,63 @@ def _apply_remediation(action_type: str) -> Dict[str, Any]:
     return res
 
 
+def _run_e2e_attach_test() -> Dict[str, Any]:
+    """Verify the end-to-end RAN/UE attach from the ella-core host's perspective.
+
+    Observes (read-only, no mutation):
+      * The ella-core container is running.
+      * An SCTP association exists on N2 (38412) — i.e. a gNodeB has connected.
+      * One or more GTP-U tunnels exist on N3 (2152) — i.e. a UE PDU session is up.
+
+    This makes the end-to-end simulation part of the agentic lifecycle: the agent
+    can confirm (and remember) whether the RAN/UE successfully attached. The UE
+    data-plane ping itself is driven from the simulator host (see sim/README.md).
+    """
+    result: Dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "core_running": False,
+        "n2_association_up": False,
+        "n3_gtpu_tunnels": 0,
+        "attached": False,
+    }
+
+    status = _get_cellular_status()
+    result["core_running"] = status.get("container") == "running"
+    result["n3_gtpu_tunnels"] = status.get("gtpu_tunnel_count", 0)
+
+    # Check for an established SCTP association on the N2 port (gNodeB connected).
+    try:
+        res = subprocess.run(
+            ["ss", "-S", "-a", "-n"], capture_output=True, text=True, timeout=5
+        )
+        if res.returncode == 0:
+            result["n2_association_up"] = any(
+                ":38412" in line and "ESTAB" in line.upper() for line in res.stdout.splitlines()
+            )
+        else:
+            # Fall back to any socket referencing the N2 port.
+            res2 = subprocess.run(["ss", "-a", "-n"], capture_output=True, text=True, timeout=5)
+            result["n2_association_up"] = ":38412" in (res2.stdout if res2.returncode == 0 else "")
+    except Exception as exc:
+        result["n2_note"] = f"ss unavailable: {exc}"
+
+    result["attached"] = (
+        result["core_running"] and result["n2_association_up"] and result["n3_gtpu_tunnels"] > 0
+    )
+
+    # Remember the outcome so recurring attach failures can be correlated later.
+    record_topology("e2e_attach", result)
+    log_session_event("tool_run_e2e_attach_test", result)
+    if result["attached"]:
+        send_telegram_alert(
+            "✅ *End-to-End Attach Verified*\n\n"
+            f"• *N2/NGAP*: gNodeB associated\n"
+            f"• *N3/GTP-U*: {result['n3_gtpu_tunnels']} tunnel(s) active\n"
+            "• UE control + user plane up through ella-core."
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # MCP server wiring (FastMCP) — Spec 3.1
 # ---------------------------------------------------------------------------
@@ -559,6 +616,11 @@ def build_server():
         """
         return _apply_remediation(action_type)
 
+    @mcp.tool()
+    def run_e2e_attach_test() -> Dict[str, Any]:
+        """Verify end-to-end RAN/UE attach: core running + N2 (NGAP) association + N3 (GTP-U) tunnel(s)."""
+        return _run_e2e_attach_test()
+
     return mcp
 
 
@@ -600,6 +662,10 @@ def run_self_test() -> int:
     gate = _apply_remediation("wipe_subscriber_db")
     checks.append(("apply_remediation(HITL gate)", gate.get("approval_required") is True))
     print(f"apply_remediation(wipe_subscriber_db) -> {json.dumps(gate)}")
+
+    e2e = _run_e2e_attach_test()
+    checks.append(("run_e2e_attach_test", isinstance(e2e, dict) and "attached" in e2e))
+    print(f"run_e2e_attach_test -> {json.dumps(e2e)}")
 
     # Verify the remediation INSERT (4 placeholders) does not raise.
     try:

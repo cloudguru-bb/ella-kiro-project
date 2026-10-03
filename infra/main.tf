@@ -32,7 +32,19 @@ variable "ssh_ingress_cidr" {
 variable "instance_type" {
   type        = string
   default     = "t3.micro"
-  description = "EC2 instance type. Use t2.micro in regions/accounts where that is the Free Tier eligible type."
+  description = "EC2 instance type for the ella-core host. Use t2.micro in regions/accounts where that is the Free Tier eligible type."
+}
+
+variable "deploy_simulator" {
+  type        = bool
+  default     = true
+  description = "Deploy a second EC2 instance running the UERANSIM gNodeB + UE simulators. Set false to deploy only the core."
+}
+
+variable "simulator_instance_type" {
+  type        = string
+  default     = "t3.micro"
+  description = "EC2 instance type for the RAN/UE simulator host (Free Tier eligible)."
 }
 
 provider "aws" {
@@ -118,32 +130,9 @@ resource "aws_security_group" "ella_sg" {
     cidr_blocks = [var.ssh_ingress_cidr]
   }
 
-  # N2 / NGAP Control Plane — native SCTP (ella-core maps 38412/sctp).
-  ingress {
-    description = "N2/NGAP gNodeB Signaling (SCTP)"
-    from_port   = 38412
-    to_port     = 38412
-    protocol    = "132" # SCTP (protocol number 132; "sctp" keyword not accepted by all providers)
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # N2 UDP fallback for simulated gNodeB stacks lacking SCTP.
-  ingress {
-    description = "N2/S1-AP gNodeB Signaling (UDP fallback)"
-    from_port   = 38412
-    to_port     = 38412
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # N3 / S1-U User Plane Data Tunneling (GTP-U)
-  ingress {
-    description = "N3 GTP-U Data Tunneling"
-    from_port   = 2152
-    to_port     = 2152
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # NOTE: N2/NGAP (SCTP+UDP 38412) and N3/GTP-U (UDP 2152) ingress are defined
+  # as separate aws_security_group_rule resources below, scoped to the RAN/UE
+  # simulator security group (private, VPC-internal) rather than world-open.
 
   # Management API & HTTP Healthcheck
   ingress {
@@ -183,6 +172,72 @@ resource "aws_security_group" "ella_sg" {
   tags = {
     Name = "ella-core-sg"
   }
+}
+
+# ------------------------------------------------------------------------------
+# 2b. RAN/UE Simulator Security Group + scoped N2/N3 access to ella-core
+# ------------------------------------------------------------------------------
+
+# Security group for the UERANSIM (gNodeB + UE) simulator host.
+resource "aws_security_group" "ran_sim_sg" {
+  name        = "ella-ran-sim-security-group"
+  description = "Security rules for the UERANSIM gNodeB/UE simulator host"
+  vpc_id      = aws_vpc.ella_vpc.id
+
+  # SSH Administration (scoped via var.ssh_ingress_cidr).
+  ingress {
+    description = "SSH Access"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.ssh_ingress_cidr]
+  }
+
+  # Full outbound (reaches ella-core N2/N3 privately + UE data plane egress).
+  egress {
+    description = "Allow all outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "ella-ran-sim-sg"
+  }
+}
+
+# N2 / NGAP control plane (SCTP 38412) — only from the simulator SG.
+resource "aws_security_group_rule" "ella_n2_sctp_from_sim" {
+  type                     = "ingress"
+  description              = "N2/NGAP gNodeB Signaling (SCTP) from RAN simulator"
+  from_port                = 38412
+  to_port                  = 38412
+  protocol                 = "132" # SCTP
+  security_group_id        = aws_security_group.ella_sg.id
+  source_security_group_id = aws_security_group.ran_sim_sg.id
+}
+
+# N2 UDP fallback (38412) — only from the simulator SG.
+resource "aws_security_group_rule" "ella_n2_udp_from_sim" {
+  type                     = "ingress"
+  description              = "N2 gNodeB Signaling (UDP fallback) from RAN simulator"
+  from_port                = 38412
+  to_port                  = 38412
+  protocol                 = "udp"
+  security_group_id        = aws_security_group.ella_sg.id
+  source_security_group_id = aws_security_group.ran_sim_sg.id
+}
+
+# N3 / GTP-U user plane (UDP 2152) — only from the simulator SG.
+resource "aws_security_group_rule" "ella_n3_gtpu_from_sim" {
+  type                     = "ingress"
+  description              = "N3 GTP-U user-plane tunnel from RAN simulator"
+  from_port                = 2152
+  to_port                  = 2152
+  protocol                 = "udp"
+  security_group_id        = aws_security_group.ella_sg.id
+  source_security_group_id = aws_security_group.ran_sim_sg.id
 }
 
 # ------------------------------------------------------------------------------
@@ -309,6 +364,41 @@ resource "aws_eip" "ella_eip" {
 }
 
 # ------------------------------------------------------------------------------
+# 4b. RAN/UE Simulator Host (second Free Tier EC2 running UERANSIM via Docker)
+# ------------------------------------------------------------------------------
+# Reaches ella-core over the private VPC address (10.0.1.0/24) on N2/N3.
+# cloud-init-sim.yaml receives ella-core's private IP via templatefile() so the
+# UERANSIM gNodeB (gnb.yaml) points at the correct AMF/N2 address automatically.
+
+resource "aws_instance" "ran_sim_host" {
+  count = var.deploy_simulator ? 1 : 0
+
+  ami                    = data.aws_ami.ubuntu_noble.id
+  instance_type          = var.simulator_instance_type
+  subnet_id              = aws_subnet.ella_public_subnet.id
+  vpc_security_group_ids = [aws_security_group.ran_sim_sg.id]
+
+  root_block_device {
+    volume_size           = 10 # keeps total EBS within the 30 GB Free Tier allotment (20 + 10)
+    volume_type           = "gp3"
+    encrypted             = true
+    delete_on_termination = true
+  }
+
+  # Pass ella-core's PRIVATE IP (VPC-internal) into the simulator bootstrap.
+  user_data = templatefile("${path.module}/cloud-init-sim.yaml", {
+    ella_core_private_ip = aws_instance.ella_host.private_ip
+  })
+  user_data_replace_on_change = true
+
+  tags = {
+    Name = "ella-ran-sim-host"
+  }
+
+  depends_on = [aws_instance.ella_host]
+}
+
+# ------------------------------------------------------------------------------
 # 5. Infrastructure Outputs
 # ------------------------------------------------------------------------------
 
@@ -325,4 +415,19 @@ output "instance_id" {
 output "healthcheck_url" {
   value       = "http://${aws_eip.ella_eip.public_ip}:8080/healthz"
   description = "HTTP Endpoint for Day-2 health checks"
+}
+
+output "ella_core_private_ip" {
+  value       = aws_instance.ella_host.private_ip
+  description = "Private (VPC-internal) IP of ella-core — the AMF/N2 + N3 address the simulator connects to."
+}
+
+output "simulator_public_ip" {
+  value       = var.deploy_simulator ? aws_instance.ran_sim_host[0].public_ip : null
+  description = "Public IP of the RAN/UE simulator host (SSH in to run UERANSIM)."
+}
+
+output "simulator_instance_id" {
+  value       = var.deploy_simulator ? aws_instance.ran_sim_host[0].id : null
+  description = "EC2 Instance ID of the RAN/UE simulator host."
 }
