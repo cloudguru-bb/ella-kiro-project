@@ -1,0 +1,45 @@
+# Ella Core configuration (upstream schema).
+# Mounted into the container at /config/config.yaml and loaded via `core --config`.
+# Reference: https://github.com/ellanetworks/core/blob/main/config/core.yaml
+#
+# NOTE on interfaces: this lab runs on a single-NIC EC2 host with host
+# networking. The primary interface on Ubuntu 24.04 on Nitro instances is
+# typically `ens5` (sometimes `eth0`). If your instance uses a different name,
+# update n3/n6 `name` accordingly (check with `ip -br link`).
+
+logging:
+  system:
+    level: "info"
+    output: "stdout"
+  audit:
+    output: "stdout"
+
+db:
+  # Persisted on the Docker named volume mounted at /core/data.
+  path: /core/data/ella.db
+
+interfaces:
+  # N2 / NGAP control plane. Bind to all addresses on the primary interface.
+  n2:
+    name: "ens5"
+    # ngap-port: 38412   # default
+
+  # N3 / GTP-U user plane (toward the RAN). Same NIC in this single-interface lab.
+  n3:
+    name: "ens5"
+
+  # N6 / SGi — internet-facing interface for UE data egress.
+  n6:
+    name: "ens5"
+
+  # REST API + UI.
+  api:
+    address: "0.0.0.0"
+    port: 5002
+
+datapath:
+  # TCX works on any interface with kernel 6.6+ (Ubuntu 24.04 ships 6.8).
+  attach-mode: "tcx"
+
+telemetry:
+  enabled: false

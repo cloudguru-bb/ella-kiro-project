@@ -53,6 +53,11 @@ DB_PATH = os.getenv("ELLA_MEMORY_DB", "/var/lib/ella-agent/memory.db")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# Ella Core serves its REST API + UI on port 5002. The unauthenticated
+# /api/v1/metrics endpoint (Prometheus text) is used as a liveness probe.
+ELLA_API_URL = os.getenv("ELLA_API_URL", "http://localhost:5002")
+ELLA_METRICS_PATH = "/api/v1/metrics"
+
 # Pending human-in-the-loop approval requests (Spec 5.4)
 APPROVAL_FILE = os.getenv("ELLA_APPROVAL_FILE", "/var/lib/ella-agent/approval_pending.json")
 
@@ -243,7 +248,7 @@ def _get_cellular_status() -> Dict[str, Any]:
     status: Dict[str, Any] = {
         "status": "healthy",
         "container": "unknown",
-        "tun_interface": False,
+        "api_reachable": False,
         "available_memory_mb": 0,
         "gtpu_tunnel_count": 0,
     }
@@ -258,14 +263,12 @@ def _get_cellular_status() -> Dict[str, Any]:
     except Exception as exc:
         status["container"] = f"error: {exc}"
 
-    # TUN interface (ogstun)
+    # Ella Core API reachability (unauthenticated metrics endpoint on :5002)
     try:
-        res = subprocess.run(
-            ["ip", "addr", "show", "ogstun"], capture_output=True, text=True, timeout=5
-        )
-        status["tun_interface"] = res.returncode == 0
+        with urllib.request.urlopen(ELLA_API_URL + ELLA_METRICS_PATH, timeout=5) as resp:
+            status["api_reachable"] = 200 <= resp.status < 300
     except Exception:
-        status["tun_interface"] = False
+        status["api_reachable"] = False
 
     # GTP-U tunnel count (active N3 user-plane tunnels on 2152/udp)
     try:
@@ -289,8 +292,8 @@ def _get_cellular_status() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Overall health rollup
-    if status["container"] not in ("running",):
+    # Overall health rollup: healthy only if the container runs AND the API responds.
+    if status["container"] != "running" or not status["api_reachable"]:
         status["status"] = "degraded"
 
     log_session_event("tool_get_cellular_status", status)
@@ -494,17 +497,25 @@ def _apply_remediation(action_type: str) -> Dict[str, Any]:
         if _DRY_RUN:
             res = {"success": True, "dry_run": True, "action": "Would re-apply NAT masquerade rule."}
         else:
+            # Ella Core owns its eBPF datapath; the host only needs a generic
+            # egress masquerade on the default-route interface for UE internet
+            # access. Determine that interface, then ensure the rule exists.
+            iface = ""
+            try:
+                r = subprocess.run(["sh", "-c", "ip route show default | awk '/default/ {print $5; exit}'"],
+                                   capture_output=True, text=True, timeout=5)
+                iface = r.stdout.strip()
+            except Exception:
+                iface = ""
             try:
                 subprocess.run(
-                    ["iptables", "-t", "nat", "-C", "POSTROUTING", "-s", "10.45.0.0/16",
-                     "!", "-o", "ogstun", "-j", "MASQUERADE"],
+                    ["iptables", "-t", "nat", "-C", "POSTROUTING", "-o", iface, "-j", "MASQUERADE"],
                     capture_output=True, text=True, timeout=10, check=True,
                 )
-                res = {"success": True, "action": "NAT masquerade rule already present; no change."}
+                res = {"success": True, "action": f"NAT masquerade on {iface} already present; no change."}
             except Exception:
                 add = subprocess.run(
-                    ["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.45.0.0/16",
-                     "!", "-o", "ogstun", "-j", "MASQUERADE"],
+                    ["iptables", "-t", "nat", "-A", "POSTROUTING", "-o", iface, "-j", "MASQUERADE"],
                     capture_output=True, text=True, timeout=10,
                 )
                 res = {"success": add.returncode == 0, "action": "Re-applied NAT masquerade rule.",
@@ -583,7 +594,7 @@ def build_server():
 
     @mcp.tool()
     def get_cellular_status() -> Dict[str, Any]:
-        """Query ella-core container health, ogstun interface, memory, and active GTP-U tunnel count."""
+        """Query ella-core container state, API reachability (:5002), memory, and active GTP-U tunnel count."""
         return _get_cellular_status()
 
     @mcp.tool()

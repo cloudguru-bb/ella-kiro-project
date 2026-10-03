@@ -23,33 +23,25 @@ write_files:
       net.ipv4.ip_forward=1
       net.ipv6.conf.all.disable_ipv6=1
 
-  - path: /etc/systemd/system/ella-tun.service
-    owner: root:root
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=Ensure /dev/net/tun device exists for ella-core
-      Before=docker.service
-
-      [Service]
-      Type=oneshot
-      ExecStart=/bin/sh -c 'mkdir -p /dev/net && [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200 && chmod 0666 /dev/net/tun || true'
-      RemainAfterExit=yes
-
-      [Install]
-      WantedBy=multi-user.target
+  # NOTE: Ella Core manages its own user-plane datapath via eBPF (XDP/TCX)
+  # attached to the host interfaces — it does NOT use a kernel `ogstun` TUN
+  # device or Open5GS-style iptables. We therefore only enable IP forwarding and
+  # a generic egress masquerade for UE internet access; no `ogstun` service.
 
   - path: /etc/systemd/system/ella-nat.service
     owner: root:root
     permissions: '0644'
     content: |
       [Unit]
-      Description=Set up iptables NAT masquerade for cellular UE user plane egress
-      After=network.target
+      Description=Masquerade UE user-plane egress out the primary interface
+      After=network-online.target
+      Wants=network-online.target
 
       [Service]
       Type=oneshot
-      ExecStart=/sbin/iptables -t nat -A POSTROUTING -s 10.45.0.0/16 ! -o ogstun -j MASQUERADE
+      # Masquerade traffic leaving the primary interface so UE data egresses to
+      # the internet. $IFACE is resolved to the default-route interface at runtime.
+      ExecStart=/bin/sh -c 'IFACE=$(ip route show default | awk "/default/ {print \$5; exit}"); /sbin/iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null || /sbin/iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE'
       RemainAfterExit=yes
 
       [Install]
@@ -106,9 +98,8 @@ runcmd:
   # Apply sysctl settings for kernel IP forwarding
   - sysctl --system
 
-  # Enable and start TUN device and NAT services
+  # Enable IP forwarding + UE egress masquerade (ella-core owns its own datapath)
   - systemctl daemon-reload
-  - systemctl enable --now ella-tun.service
   - systemctl enable --now ella-nat.service
 
   # Install Docker Engine & Docker Compose CLI
@@ -131,7 +122,7 @@ runcmd:
   # Fetch the project (public repo) and stage app + agent files
   - git clone --depth 1 https://github.com/cloudguru-bb/ella-kiro-project.git /opt/ella/src
   - cp /opt/ella/src/app/docker-compose.yml /opt/ella/app/docker-compose.yml
-  - cp /opt/ella/src/app/ella-core.yaml /opt/ella/app/ella-core.yaml
+  - cp /opt/ella/src/app/config.yaml /opt/ella/app/config.yaml
   - cp /opt/ella/src/agent/ella_mcp_server.py /opt/ella/agent/ella_mcp_server.py
   - cp /opt/ella/src/agent/self_healing_loop.py /opt/ella/agent/self_healing_loop.py
   - cp /opt/ella/src/agent/requirements.txt /opt/ella/agent/requirements.txt

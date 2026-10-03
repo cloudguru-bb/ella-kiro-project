@@ -1,29 +1,35 @@
-version: '3.8'
-
+# ella-core container stack.
+#
+# Uses the official upstream image from the `ellanetworks` org. Ella Core is a
+# Rockcraft/Pebble-based image whose entrypoint is `core --config <file>`; it
+# serves its REST API + UI on port 5002 and attaches its user-plane datapath via
+# eBPF (XDP/TCX) directly to host network interfaces — so it needs host
+# networking and elevated privileges.
+#
+# Config schema reference: https://github.com/ellanetworks/core (config/core.yaml)
 services:
   ella-core:
-    image: ghcr.io/ella-core/ella-core:v0.1.0
+    image: ghcr.io/ellanetworks/ella-core:v1.19.0
     container_name: ella-core
     restart: unless-stopped
+    command: ["core", "--config", "/config/config.yaml"]
+
+    # The eBPF/TCX datapath must attach to the host's real interfaces (n3/n6),
+    # which requires host networking and privileged mode (matches upstream k8s
+    # core-statefulset.yaml: securityContext.privileged = true).
+    network_mode: host
+    privileged: true
+
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
       - SYS_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "38412:38412/sctp"  # N2 / NGAP signaling port
-      - "2152:2152/udp"     # N3 / GTP-U user plane port
-      - "8080:8080/tcp"    # Management REST API & Health Check
-    environment:
-      - MCC=999
-      - MNC=70
-      - TAC=1
-      - SUBNET=10.45.0.0/16
-      - LOG_LEVEL=info
+      - BPF
+      - SYS_RESOURCE
+
     volumes:
-      - ./ella-core.yaml:/etc/ella/ella-core.yaml:ro
-      - ella-db:/var/lib/ella
+      - ./config.yaml:/config/config.yaml:ro
+      - ella-data:/core/data
+
     deploy:
       resources:
         limits:
@@ -32,13 +38,16 @@ services:
         reservations:
           memory: 128M
           cpus: '0.25'
+
+    # /api/v1/metrics is an unauthenticated endpoint (Prometheus text) on :5002,
+    # usable as a liveness probe.
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5002/api/v1/metrics >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 20s
 
 volumes:
-  ella-db:
+  ella-data:
     driver: local

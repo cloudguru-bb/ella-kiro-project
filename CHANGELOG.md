@@ -1,5 +1,48 @@
 # Changelog
 
+## Fix: use the real upstream Ella Core image, config, and ports
+
+Live deployment failed because the stack referenced a non-existent image
+(`ghcr.io/ella-core/ella-core:v0.1.0` → `error from registry: denied`) and an
+Open5GS-style config/datapath that Ella Core does not use. The agent's
+self-healing loop behaved correctly (it detected the outage and attempted
+restarts), but the core could never start. Corrected to match upstream
+`ellanetworks/core`:
+
+### Container stack (`app/`)
+- Image → **`ghcr.io/ellanetworks/ella-core:v1.19.0`** (latest release).
+- Run model → `command: ["core", "--config", "/config/config.yaml"]`,
+  `privileged: true`, `network_mode: host` (the eBPF/TCX datapath attaches to the
+  host NICs; mirrors upstream k8s `core-statefulset.yaml`).
+- Replaced `app/ella-core.yaml` with **`app/config.yaml`** in the upstream schema
+  (`logging` / `db` / `interfaces` {n2,n3,n6,api} / `datapath`). Data volume at
+  `/core/data`.
+- Health probe → `GET /api/v1/metrics` on **:5002** (unauthenticated Prometheus
+  text), replacing the non-existent `/healthz` on :8080.
+
+### Infrastructure (`infra/`)
+- Security group management port **8080 → 5002**; outputs updated
+  (`healthcheck_url` → `/api/v1/metrics`; added `ella_ui_url`).
+- cloud-init: removed the obsolete `ella-tun.service` (`ogstun`) and the
+  `10.45.0.0/16 ! -o ogstun` NAT rule; now applies a generic egress masquerade on
+  the default-route interface. Copies `config.yaml` instead of `ella-core.yaml`.
+
+### Agent (`agent/`)
+- `get_cellular_status`: replaced the `ogstun` TUN check with a live **API
+  reachability** probe (`:5002/api/v1/metrics`); health rollup now requires both
+  container running AND API reachable. New `ELLA_API_URL` env var.
+- `self_healing_loop.py`: default `ELLA_HEALTH_URL` → `:5002/api/v1/metrics`.
+- `apply_remediation(flush_stale_iptables)`: re-applies the generic egress
+  masquerade on the default interface (no `ogstun`).
+
+### Docs
+- README, TUTORIAL, TEST_CASES, sim/README updated for :5002, `/api/v1/metrics`,
+  and the eBPF datapath. Added a correction banner to `Requirements-v2.md`.
+
+> Not yet changed (follow-ups): subscriber provisioning + the e2e attach still
+> assume generic behavior; wiring them to Ella Core's real REST API (and its
+> shipped AI "skill") is a tracked next step.
+
 ## RAN/UE simulator on a dedicated host
 
 Added full end-to-end simulation: a **second Free-Tier EC2 instance** running the

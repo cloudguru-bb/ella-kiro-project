@@ -78,7 +78,7 @@ five tools over the **Model Context Protocol (MCP)**:
 
 | Tool | What it does | Learning point |
 |---|---|---|
-| `get_cellular_status()` | Reads container health, `ogstun`, memory, GTP-U tunnels | *Observation* tool (read-only) |
+| `get_cellular_status()` | Reads container state, API reachability (`:5002`), memory, GTP-U tunnels | *Observation* tool (read-only) |
 | `provision_subscriber(imsi, key_k, opc, sst, sd)` | Adds a validated 5G test subscriber | *Action* tool with **input validation** |
 | `restart_core_service()` | Restarts the core container | *Remediation* action |
 | `evaluate_well_architected()` | Live 6-pillar posture check | *Reasoning/audit* tool |
@@ -200,7 +200,7 @@ python - <<'PY'
 import ella_mcp_server as e
 e.init_db()
 e.log_remediation_outcome("high_memory_or_crash", "docker_restart", "success")
-e.log_remediation_outcome("ogstun_missing", "flush_stale_iptables", "success")
+e.log_remediation_outcome("egress_nat_missing", "flush_stale_iptables", "success")
 PY
 sqlite3 "$ELLA_MEMORY_DB" "SELECT trigger_cause, action_taken, outcome FROM remediation_memory;"
 ```
@@ -216,7 +216,7 @@ sqlite3 "$ELLA_MEMORY_DB" "SELECT trigger_cause, action_taken, outcome FROM reme
 
 `agent/self_healing_loop.py` is the autonomous **Thought → Action → Observation**
 engine. On a loop it:
-1. **Observes** container state + the `/healthz` endpoint + host memory.
+1. **Observes** container state + the ella-core API (`:5002/api/v1/metrics`) + host memory.
 2. **Thinks**: counts consecutive failures; checks a memory floor.
 3. **Acts**: after `FAIL_THRESHOLD` failures (or on memory pressure) it calls
    `restart_core_service()` and logs the incident.
@@ -228,7 +228,7 @@ Its behavior is tunable entirely through environment variables:
 | `ELLA_POLL_INTERVAL` | `15` | Seconds between observations |
 | `ELLA_FAIL_THRESHOLD` | `3` | Consecutive failures before healing |
 | `ELLA_MIN_FREE_MB` | `80` | Memory floor that triggers a restart |
-| `ELLA_HEALTH_URL` | `http://localhost:8080/healthz` | Endpoint to probe |
+| `ELLA_HEALTH_URL` | `http://localhost:5002/api/v1/metrics` | Endpoint to probe |
 
 ### Exercise 4.1 — Run the loop against a "down" core (local, no Docker needed)
 
@@ -237,7 +237,7 @@ up so you don't wait:
 
 ```bash
 ELLA_POLL_INTERVAL=2 ELLA_FAIL_THRESHOLD=3 \
-ELLA_HEALTH_URL="http://localhost:59999/healthz" \
+ELLA_HEALTH_URL="http://localhost:59999/api/v1/metrics" \
 python agent/self_healing_loop.py
 ```
 
@@ -369,7 +369,7 @@ SSH in (`ssh ubuntu@<instance_public_ip>`), then:
 
 ```bash
 docker ps                               # ella-core should be Up/healthy
-ip addr show ogstun                     # user-plane TUN interface
+curl -fsS http://localhost:5002/api/v1/metrics | head   # API responding
 systemctl status ella-agent             # the self-healing loop, Active (running)
 journalctl -u ella-agent -n 20          # the agent's live observations
 ```
