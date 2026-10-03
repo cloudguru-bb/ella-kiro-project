@@ -23,6 +23,18 @@ variable "environment" {
   description = "Deployment environment name."
 }
 
+variable "ssh_ingress_cidr" {
+  type        = string
+  default     = "0.0.0.0/0"
+  description = "CIDR allowed to reach SSH (22). Set to your admin IP (e.g. 1.2.3.4/32) for a secure, Well-Architected posture."
+}
+
+variable "instance_type" {
+  type        = string
+  default     = "t3.micro"
+  description = "EC2 instance type. Use t2.micro in regions/accounts where that is the Free Tier eligible type."
+}
+
 provider "aws" {
   region = var.aws_region
 
@@ -96,18 +108,28 @@ resource "aws_security_group" "ella_sg" {
   description = "Security rules for ella-core 5G/4G cellular signaling and management"
   vpc_id      = aws_vpc.ella_vpc.id
 
-  # SSH Administration
+  # SSH Administration — scoped via var.ssh_ingress_cidr (default world-open;
+  # override with your admin IP for a Well-Architected security posture).
   ingress {
     description = "SSH Access"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Restrict to your IP in production
+    cidr_blocks = [var.ssh_ingress_cidr]
   }
 
-  # N2 / S1-MME Control Plane (SCTP & UDP fallback for simulated gNodeB)
+  # N2 / NGAP Control Plane — native SCTP (ella-core maps 38412/sctp).
   ingress {
-    description = "N2/S1-AP gNodeB Signaling (SCTP/UDP)"
+    description = "N2/NGAP gNodeB Signaling (SCTP)"
+    from_port   = 38412
+    to_port     = 38412
+    protocol    = "132" # SCTP (protocol number 132; "sctp" keyword not accepted by all providers)
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # N2 UDP fallback for simulated gNodeB stacks lacking SCTP.
+  ingress {
+    description = "N2/S1-AP gNodeB Signaling (UDP fallback)"
     from_port   = 38412
     to_port     = 38412
     protocol    = "udp"
@@ -128,6 +150,23 @@ resource "aws_security_group" "ella_sg" {
     description = "ella-core REST API & Health Check"
     from_port   = 8080
     to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP / HTTPS for management + Agent MCP endpoints (Spec 1.3)
+  ingress {
+    description = "HTTP (management / MCP)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS (management / MCP)"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -167,9 +206,47 @@ resource "aws_iam_role" "ella_instance_role" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attach" {
-  role       = aws_iam_role.ella_instance_role.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# Least-privilege inline policy (Spec 4.2): CloudWatch Logs limited to the
+# /aws/ec2/ella-core log group, plus the metric PutMetricData the agent needs.
+# No wildcard IAM, no broad managed policy.
+resource "aws_iam_role_policy" "ella_cloudwatch_scoped" {
+  name = "ella-cloudwatch-scoped"
+  role = aws_iam_role.ella_instance_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ScopedLogDelivery"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = [
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/ella-core",
+          "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/ec2/ella-core:*"
+        ]
+      },
+      {
+        Sid      = "CloudWatchMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:PutMetricData"]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "CWAgent"
+          }
+        }
+      }
+    ]
+  })
 }
 
 resource "aws_iam_instance_profile" "ella_instance_profile" {
@@ -197,11 +274,11 @@ data "aws_ami" "ubuntu_noble" {
 }
 
 resource "aws_instance" "ella_host" {
-  ami                  = data.aws_ami.ubuntu_noble.id
-  instance_type        = "t3.micro" # AWS Free Tier eligible (750 hours/month)
-  subnet_id            = aws_subnet.ella_public_subnet.id
+  ami                    = data.aws_ami.ubuntu_noble.id
+  instance_type          = var.instance_type # AWS Free Tier eligible (750 hours/month)
+  subnet_id              = aws_subnet.ella_public_subnet.id
   vpc_security_group_ids = [aws_security_group.ella_sg.id]
-  iam_instance_profile = aws_iam_instance_profile.ella_instance_profile.name
+  iam_instance_profile   = aws_iam_instance_profile.ella_instance_profile.name
 
   # AWS Free Tier Storage Limits (Max 30GB total across free tier)
   root_block_device {
@@ -211,11 +288,24 @@ resource "aws_instance" "ella_host" {
     delete_on_termination = true
   }
 
-  user_data = file("${path.module}/cloud-init.yaml")
+  user_data                   = file("${path.module}/cloud-init.yaml")
+  user_data_replace_on_change = true
 
   tags = {
     Name = "ella-core-host"
   }
+}
+
+# Stable public address for the host (Spec 2.1 — Elastic IP).
+resource "aws_eip" "ella_eip" {
+  domain   = "vpc"
+  instance = aws_instance.ella_host.id
+
+  tags = {
+    Name = "ella-core-eip"
+  }
+
+  depends_on = [aws_internet_gateway.ella_igw]
 }
 
 # ------------------------------------------------------------------------------
@@ -223,8 +313,8 @@ resource "aws_instance" "ella_host" {
 # ------------------------------------------------------------------------------
 
 output "instance_public_ip" {
-  value       = aws_instance.ella_host.public_ip
-  description = "Public IP address of the ella-core EC2 host"
+  value       = aws_eip.ella_eip.public_ip
+  description = "Elastic (public) IP address of the ella-core EC2 host"
 }
 
 output "instance_id" {
@@ -233,6 +323,6 @@ output "instance_id" {
 }
 
 output "healthcheck_url" {
-  value       = "http://${aws_instance.ella_host.public_ip}:8080/healthz"
+  value       = "http://${aws_eip.ella_eip.public_ip}:8080/healthz"
   description = "HTTP Endpoint for Day-2 health checks"
 }

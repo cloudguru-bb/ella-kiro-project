@@ -124,3 +124,8 @@ In addition to the core cellular deployment (Day-0/Day-1), this specification in
 To implement this specification in Kiro:
 1. Drop `Requirements-v2.md` into your project root directory.
 2. Prompt Kiro: *"Implement the full lifecycle specification in Requirements-v2.md step-by-step. Build the Terraform files in `/infra`, the ella-core container stack in `/app`, and the Python MCP Agent server with memory persistence in `/agent`."*
+
+> Implemented. The repository now follows this layout — Terraform + host bootstrap
+> in [`infra/`](./infra), the container stack in [`app/`](./app), and the MCP agent
+> server (`ella_mcp_server.py`) + self-healing loop + SQLite memory in
+> [`agent/`](./agent). See [`README.md`](./README.md) and [`CHANGELOG.md`](./CHANGELOG.md).

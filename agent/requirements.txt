@@ -1,0 +1,4 @@
+# Ella MCP Agent Server dependencies.
+# Pin to the MCP SDK v1 API (FastMCP). v2.x renamed FastMCP -> MCPServer and
+# changed the API; this server targets the widely-deployed v1 interface.
+mcp>=1.2,<2

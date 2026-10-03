@@ -10,6 +10,8 @@ packages:
   - lsb-release
   - iptables
   - net-tools
+  - git
+  - python3
   - python3-pip
   - python3-venv
 
@@ -49,6 +51,28 @@ write_files:
       Type=oneshot
       ExecStart=/sbin/iptables -t nat -A POSTROUTING -s 10.45.0.0/16 ! -o ogstun -j MASQUERADE
       RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/ella-agent.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Ella Day-2 Observability & Self-Healing Agent
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Type=simple
+      WorkingDirectory=/opt/ella/agent
+      Environment=ELLA_MEMORY_DB=/var/lib/ella-agent/memory.db
+      Environment=ELLA_APPROVAL_FILE=/var/lib/ella-agent/approval_pending.json
+      EnvironmentFile=-/etc/ella-agent/telegram.env
+      ExecStart=/opt/ella/agent/venv/bin/python /opt/ella/agent/self_healing_loop.py
+      Restart=always
+      RestartSec=10
 
       [Install]
       WantedBy=multi-user.target
@@ -101,5 +125,26 @@ runcmd:
   - /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
   # Prepare Application & Agent Directories
-  - mkdir -p /opt/ella/app /opt/ella/agent
+  - mkdir -p /opt/ella/app /opt/ella/agent /var/lib/ella-agent /etc/ella-agent
   - chown -R ubuntu:ubuntu /opt/ella
+
+  # Fetch the project (public repo) and stage app + agent files
+  - git clone --depth 1 https://github.com/cloudguru-bb/ella-kiro-project.git /opt/ella/src
+  - cp /opt/ella/src/app/docker-compose.yml /opt/ella/app/docker-compose.yml
+  - cp /opt/ella/src/app/ella-core.yaml /opt/ella/app/ella-core.yaml
+  - cp /opt/ella/src/agent/ella_mcp_server.py /opt/ella/agent/ella_mcp_server.py
+  - cp /opt/ella/src/agent/self_healing_loop.py /opt/ella/agent/self_healing_loop.py
+  - cp /opt/ella/src/agent/requirements.txt /opt/ella/agent/requirements.txt
+
+  # Deploy the ella-core container stack (Spec 2.5)
+  - cd /opt/ella/app && docker compose up -d
+
+  # Create the Python virtualenv for the MCP agent + self-healing loop (Spec 2.1)
+  - python3 -m venv /opt/ella/agent/venv
+  - /opt/ella/agent/venv/bin/pip install --upgrade pip
+  - /opt/ella/agent/venv/bin/pip install -r /opt/ella/agent/requirements.txt
+  - chown -R ubuntu:ubuntu /opt/ella /var/lib/ella-agent
+
+  # Start the autonomous Day-2 self-healing agent (Spec 5.2)
+  - systemctl daemon-reload
+  - systemctl enable --now ella-agent.service
