@@ -18,7 +18,7 @@ infra/        AWS infrastructure (IaC) + host bootstrap
                     deploys the app stack + agent, starts self-healing service
 app/          Cellular core container stack
   docker-compose.yml   ella-core service definition
-  ella-core.yaml       ella-core runtime config (mounted into the container)
+  config.yaml          ella-core runtime config (upstream schema; mounted at /config/config.yaml)
 sim/          RAN/UE simulator stack (runs on a SEPARATE EC2 host)
   docker-compose.yml   UERANSIM gNodeB + UE containers
   gnb.yaml.tmpl        gNodeB config template (rendered with core/host IPs at boot)
@@ -75,7 +75,7 @@ MCP stdio transport:
 
 | Tool | Purpose |
 |------|---------|
-| `get_cellular_status()` | Container health, `ogstun` interface, memory, GTP-U tunnel count |
+| `get_cellular_status()` | Container state, API reachability (`:5002`), memory, GTP-U tunnel count |
 | `provision_subscriber(imsi, key_k, opc, sst, sd)` | Provision a validated 5G test subscriber |
 | `restart_core_service()` | Graceful container restart (self-healing) |
 | `evaluate_well_architected()` | Live 6-pillar posture checks (cost / reliability / security / performance) |
@@ -103,8 +103,8 @@ python3 -m venv venv && ./venv/bin/pip install -r agent/requirements.txt
 ./venv/bin/python agent/ella_mcp_server.py --test
 
 # 2. Cellular core status (on the host)
-docker ps                     # ella-core healthy
-ip addr show ogstun           # 10.45.0.1/16 initialized
+docker ps                                  # ella-core container Up/healthy
+curl -fsS http://localhost:5002/api/v1/metrics | head   # API responding on :5002
 
 # 4. Self-healing (on the host)
 docker stop ella-core         # ella-agent detects + restarts within ~30s

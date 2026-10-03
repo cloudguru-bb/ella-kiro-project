@@ -92,7 +92,7 @@ Run commands from the **repo root** unless a step says otherwise.
 |---|---|
 | **ENV** | Local |
 | **Steps** | `python -c "import json,ella_mcp_server as e; print(json.dumps(e._get_cellular_status()))"` |
-| **Expected Result** | JSON object containing keys: `status`, `container`, `tun_interface`, `available_memory_mb`, `gtpu_tunnel_count`. (Off-AWS: `container` likely `not_found` and `status` `degraded` — acceptable.) |
+| **Expected Result** | JSON object containing keys: `status`, `container`, `api_reachable`, `available_memory_mb`, `gtpu_tunnel_count`. (Off-AWS: `container` likely `not_found`, `api_reachable` false, `status` `degraded` — acceptable.) |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ---
@@ -180,7 +180,7 @@ Run commands from the **repo root** unless a step says otherwise.
 |---|---|
 | **ENV** | Local |
 | **Objective** | The loop heals only after `FAIL_THRESHOLD` consecutive failures. |
-| **Steps** | Run, watch ~10s, then Ctrl-C:<br>`ELLA_POLL_INTERVAL=2 ELLA_FAIL_THRESHOLD=3 ELLA_HEALTH_URL="http://localhost:59999/healthz" python agent/self_healing_loop.py` |
+| **Steps** | Run, watch ~10s, then Ctrl-C:<br>`ELLA_POLL_INTERVAL=2 ELLA_FAIL_THRESHOLD=3 ELLA_HEALTH_URL="http://localhost:59999/api/v1/metrics" python agent/self_healing_loop.py` |
 | **Expected Result** | Logs show `failing (1/3)`, `(2/3)`, `(3/3)`, then `Triggering self-heal (cause=health_check_failure)`. It does **not** heal before the 3rd failure. |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
@@ -252,7 +252,7 @@ Run commands from the **repo root** unless a step says otherwise.
 | **ENV** | Local (static review) |
 | **Objective** | Confirm Spec 1.3 ports are present. |
 | **Steps** | Inspect `infra/main.tf` ingress rules. |
-| **Expected Result** | Ingress exists for 22 (scoped via `var.ssh_ingress_cidr`), 38412 **SCTP** + 38412 UDP, 2152 UDP, 8080 TCP, 80 TCP, 443 TCP. |
+| **Expected Result** | SSH 22 (scoped via `var.ssh_ingress_cidr`), 5002 TCP, 80 TCP, 443 TCP on the core SG; N2 (SCTP+UDP 38412) and N3 (UDP 2152) exist as separate `aws_security_group_rule` resources scoped to the simulator SG. |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ### TC-F4 — IAM role is least-privilege
@@ -290,8 +290,8 @@ Run commands from the **repo root** unless a step says otherwise.
 | | |
 |---|---|
 | **ENV** | Cloud (SSH to host) |
-| **Steps** | `docker ps` and `ip addr show ogstun` |
-| **Expected Result** | `ella-core` container shows `Up`/`healthy`; `ogstun` interface exists (user-plane address ~`10.45.0.1/16`). |
+| **Steps** | `docker ps` and `curl -fsS http://localhost:5002/api/v1/metrics | head` |
+| **Expected Result** | `ella-core` container shows `Up`/`healthy`; the metrics endpoint returns Prometheus text (API up). |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ### TC-G3 — Health endpoint responds
@@ -299,7 +299,7 @@ Run commands from the **repo root** unless a step says otherwise.
 |---|---|
 | **ENV** | Cloud |
 | **Steps** | From your laptop: `curl -i "$(cd infra && terraform output -raw healthcheck_url)"` |
-| **Expected Result** | HTTP 2xx response from `/healthz`. |
+| **Expected Result** | HTTP 2xx response from `/api/v1/metrics` (Prometheus text). |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ### TC-G4 — Self-healing service is running

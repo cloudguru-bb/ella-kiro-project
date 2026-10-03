@@ -1,3 +1,16 @@
+> **⚠️ Implementation note (updated after live testing).** This spec was written
+> against an assumed Open5GS-style image. The real upstream **Ella Core**
+> (`ghcr.io/ellanetworks/ella-core`) differs in several ways, and the code now
+> follows the upstream reality, not these original lines:
+> - Image is `ghcr.io/ellanetworks/ella-core:v1.19.0` (not `ella-core/ella-core:v0.1.0`).
+> - Config is a single `--config /config/config.yaml` file in the upstream schema
+>   (not env vars, not `/etc/ella/ella-core.yaml`).
+> - REST API + UI (and the health probe `/api/v1/metrics`) are on **:5002**, not :8080.
+> - The user-plane datapath is **eBPF (XDP/TCX)** on the host NICs — there is **no**
+>   `ogstun` TUN device or Open5GS iptables NAT; only a generic egress masquerade.
+>
+> See `CHANGELOG.md` and `README.md` for the authoritative, as-built behavior.
+
 # Project Specification v2: Minimal ella-core Deployment with Autonomous Agentic Lifecycle Management on AWS
 
 ## 1. Executive Summary & Objective

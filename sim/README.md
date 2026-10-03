@@ -55,8 +55,8 @@ attach **and** user-plane data path through ella-core's NAT.
 
 | Field | Value | Set in |
 |---|---|---|
-| MCC / MNC | 999 / 70 | `gnb.yaml`, `ue.yaml`, `app/ella-core.yaml` |
-| TAC | 1 | `gnb.yaml`, `app/ella-core.yaml` |
+| MCC / MNC | 999 / 70 | `gnb.yaml`, `ue.yaml`, ella-core subscriber (provisioned via API) |
+| TAC | 1 | `gnb.yaml`, ella-core operator config |
 | Slice | SST 1 / SD 000001 | `gnb.yaml`, `ue.yaml`, `provision_subscriber()` |
 | IMSI | 999700000000001 | `ue.yaml`, `provision_subscriber()` |
 | Ki / OPc | 465B… / E8ED… | `ue.yaml`, `provision_subscriber()` |

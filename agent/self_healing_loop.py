@@ -35,7 +35,7 @@ logger = logging.getLogger("ella-self-healing")
 POLL_INTERVAL = int(os.getenv("ELLA_POLL_INTERVAL", "15"))     # seconds between polls
 FAIL_THRESHOLD = int(os.getenv("ELLA_FAIL_THRESHOLD", "3"))     # consecutive failures before restart
 MIN_FREE_MB = int(os.getenv("ELLA_MIN_FREE_MB", "80"))          # memory-pressure floor
-HEALTH_URL = os.getenv("ELLA_HEALTH_URL", "http://localhost:8080/healthz")
+HEALTH_URL = os.getenv("ELLA_HEALTH_URL", "http://localhost:5002/api/v1/metrics")
 
 
 def health_ok() -> bool:

@@ -134,11 +134,11 @@ resource "aws_security_group" "ella_sg" {
   # as separate aws_security_group_rule resources below, scoped to the RAN/UE
   # simulator security group (private, VPC-internal) rather than world-open.
 
-  # Management API & HTTP Healthcheck
+  # Management API & HTTP Healthcheck (ella-core REST API + UI on :5002)
   ingress {
     description = "ella-core REST API & Health Check"
-    from_port   = 8080
-    to_port     = 8080
+    from_port   = 5002
+    to_port     = 5002
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -413,8 +413,13 @@ output "instance_id" {
 }
 
 output "healthcheck_url" {
-  value       = "http://${aws_eip.ella_eip.public_ip}:8080/healthz"
-  description = "HTTP Endpoint for Day-2 health checks"
+  value       = "http://${aws_eip.ella_eip.public_ip}:5002/api/v1/metrics"
+  description = "HTTP Endpoint for Day-2 health checks (ella-core metrics on :5002)"
+}
+
+output "ella_ui_url" {
+  value       = "http://${aws_eip.ella_eip.public_ip}:5002/"
+  description = "ella-core web UI / REST API base URL"
 }
 
 output "ella_core_private_ip" {
