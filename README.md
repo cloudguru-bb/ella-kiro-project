@@ -92,6 +92,16 @@ journalctl -u ella-agent -f
   IAM role grants only scoped `logs:*` + namespaced `PutMetricData` (no wildcards).
 - `terraform destroy` tears everything down to return to $0.
 
+## Learning materials
+
+New to agentic systems? Start here:
+- **[`docs/TUTORIAL.md`](./docs/TUTORIAL.md)** — a guided, hands-on walkthrough that
+  *teaches* the agent lifecycle (MCP tools, memory, self-healing, guardrails) with
+  runnable exercises. Most of it works locally with no AWS account.
+- **[`docs/TEST_CASES.md`](./docs/TEST_CASES.md)** — a 31-case, human-executable test
+  suite with step-by-step commands, expected results, and pass/fail tracking. Maps
+  directly to the Definition of Done in `Requirements-v2.md`.
+
 ## Changes from the initial drop
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full list of fixes applied to the
