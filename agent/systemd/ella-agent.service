@@ -1,0 +1,19 @@
+[Unit]
+Description=Ella Day-2 Observability & Self-Healing Agent
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ella/agent
+Environment=ELLA_MEMORY_DB=/var/lib/ella-agent/memory.db
+Environment=ELLA_APPROVAL_FILE=/var/lib/ella-agent/approval_pending.json
+# Optional Telegram alerting — populate via a drop-in or EnvironmentFile:
+#   /etc/ella-agent/telegram.env  (TELEGRAM_BOT_TOKEN=..., TELEGRAM_CHAT_ID=...)
+EnvironmentFile=-/etc/ella-agent/telegram.env
+ExecStart=/opt/ella/agent/venv/bin/python /opt/ella/agent/self_healing_loop.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

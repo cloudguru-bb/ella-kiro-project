@@ -1,0 +1,37 @@
+# ella-core configuration
+# Referenced by app/docker-compose.yml and mounted at /etc/ella/ella-core.yaml.
+# Minimal single-node 5G core profile sized for an AWS Free Tier t3.micro host.
+#
+# Docs: https://docs.ellanetworks.com/
+
+log-level: info
+
+db:
+  # Persistent subscriber / topology DB stored on the mounted volume.
+  path: /var/lib/ella/core.db
+
+interfaces:
+  # Management REST API & health check (mapped to host :8080).
+  api:
+    port: 8080
+    tls:
+      enabled: false
+
+  # N2 / NGAP control-plane signaling (SCTP, host :38412).
+  n2:
+    port: 38412
+
+  # N3 / GTP-U user-plane (UDP, host :2152).
+  n3:
+    port: 2152
+
+core:
+  mcc: "999"            # Test PLMN (3GPP-reserved for testing)
+  mnc: "70"
+  tac: 1
+  # User-plane UE address pool. Must match the iptables MASQUERADE source
+  # range configured in infra/cloud-init.yaml (10.45.0.0/16).
+  ue-subnet: 10.45.0.0/16
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
