@@ -396,6 +396,90 @@ terraform destroy
 
 ---
 
+## 6b. Module — End-to-end: attach a real RAN + UE (optional, Cloud)
+
+So far the agent *manages* a core that nothing connects to. This module stands up
+a **UERANSIM gNodeB + UE** on a **second Free-Tier instance** and drives real
+traffic: **UE → gNodeB → ella-core (N2/N3) → NAT → internet.**
+
+### How the two hosts talk
+Both instances live in the same VPC subnet and communicate over **private IPs**.
+ella-core's security group allows N2 (SCTP/UDP 38412) and N3 (GTP-U 2152)
+**only from the simulator's security group** — not the public internet. Terraform
+passes ella-core's private IP into the simulator so UERANSIM's `gnb.yaml` targets
+the right AMF automatically.
+
+> 🔎 **Learning point:** This is a deliberate security design. SCTP across the
+> public internet is unreliable, and exposing GTP-U to the world is dangerous.
+> Scoping ingress to a *source security group* (not a CIDR) is the Well-Architected
+> way to let two tiers talk privately.
+
+### Exercise 6b.1 — Deploy both hosts
+
+```bash
+cd infra
+terraform apply -var="ssh_ingress_cidr=$(curl -s https://checkip.amazonaws.com)/32"
+terraform output        # note simulator_public_ip and ella_core_private_ip
+```
+
+### Exercise 6b.2 — Provision the matching subscriber
+
+The UE's IMSI/Ki/OPc must exist in ella-core. On the **core** host, provision it
+via the agent (the SIM config already matches these defaults):
+
+```bash
+# Using an MCP client (see §2.2), call provision_subscriber() with defaults,
+# or exercise the tool directly for learning:
+cd /opt/ella/src
+/opt/ella/agent/venv/bin/python -c "import sys; sys.path.insert(0,'agent'); import ella_mcp_server as e; print(e._provision_subscriber())"
+```
+
+### Exercise 6b.3 — Watch the gNodeB register
+
+SSH to the **simulator** host (`simulator_public_ip`):
+
+```bash
+cd /opt/ella-sim/sim
+docker compose logs gnb | grep -i "NG Setup"
+```
+Look for an **NG Setup** success — the gNodeB has associated with ella-core's AMF
+over N2.
+
+### Exercise 6b.4 — Attach the UE and go online
+
+```bash
+docker compose run --rm ue           # watch for "PDU Session establishment is successful"
+# in a second shell on the sim host:
+ip addr show uesimtun0               # the UE's data-plane interface, e.g. 10.45.0.x
+ping -I uesimtun0 -c 4 8.8.8.8       # 🎉 traffic out via ella-core's NAT
+curl --interface uesimtun0 -s https://checkip.amazonaws.com
+```
+
+> 🎯 A successful ping over `uesimtun0` means you've exercised the **entire** 5G
+> path: registration + authentication (control plane) *and* a PDU session carrying
+> user data through the core to the internet.
+
+### Exercise 6b.5 — Let the agent confirm the attach
+
+Back on the **core** host, have the agent verify end-to-end from its own vantage:
+
+```bash
+/opt/ella/agent/venv/bin/python -c "import sys,json; sys.path.insert(0,'agent'); import ella_mcp_server as e; print(json.dumps(e._run_e2e_attach_test(), indent=2))"
+```
+
+Expected (with the UE attached): `"n2_association_up": true`,
+`"n3_gtpu_tunnels"` ≥ 1, `"attached": true`.
+
+> 🧠 **Why this matters:** The agent doesn't just *host* the core — it can now
+> **observe the live attach state** and remember it (`topology_memory`). Combine
+> this with Module 4: an agent could detect that a UE *dropped* and react.
+
+### Exercise 6b.6 — Tear down
+
+`terraform destroy` removes **both** instances. Don't skip it.
+
+---
+
 ## 7. Where to go next (stretch goals)
 
 - **Connect a real LLM:** register this MCP server with Claude Desktop or an agent

@@ -19,6 +19,11 @@ infra/        AWS infrastructure (IaC) + host bootstrap
 app/          Cellular core container stack
   docker-compose.yml   ella-core service definition
   ella-core.yaml       ella-core runtime config (mounted into the container)
+sim/          RAN/UE simulator stack (runs on a SEPARATE EC2 host)
+  docker-compose.yml   UERANSIM gNodeB + UE containers
+  gnb.yaml.tmpl        gNodeB config template (rendered with core/host IPs at boot)
+  ue.yaml.tmpl         UE config template (IMSI/Ki/OPc matched to the subscriber)
+  README.md            End-to-end attach + data-plane test guide
 agent/        Autonomous agent control plane
   ella_mcp_server.py   Real MCP server (FastMCP) exposing 5 agent tools
   self_healing_loop.py Day-2 observability + self-healing daemon
@@ -36,15 +41,36 @@ terraform init
 terraform apply -var="ssh_ingress_cidr=$(curl -s https://checkip.amazonaws.com)/32"
 ```
 
-`cloud-init.yaml` then automatically, on the instance:
+By default this provisions **two** Free-Tier instances: the ella-core host and a
+RAN/UE simulator host. Set `-var="deploy_simulator=false"` to deploy only the core.
+
+`cloud-init.yaml` then automatically, on the **core** instance:
 1. Installs Docker, Python 3.12 + venv, and the CloudWatch agent.
 2. Enables IP forwarding, creates `/dev/net/tun`, and applies the NAT masquerade.
 3. Clones this repo, deploys the `ella-core` stack (`docker compose up -d`).
 4. Creates the agent virtualenv and starts the `ella-agent` self-healing service.
 
+And `cloud-init-sim.yaml` on the **simulator** instance installs Docker, renders the
+UERANSIM configs with ella-core's **private** IP, and starts the gNodeB. See
+[`sim/README.md`](./sim/README.md) for the end-to-end attach + data-plane test.
+
+## End-to-end (UE → RAN → core → internet)
+
+The simulator host reaches ella-core over **private VPC IPs**; ella-core's security
+group permits N2 (SCTP/UDP 38412) and N3 (GTP-U 2152) **only from the simulator's
+security group** (not the public internet). After deploy:
+
+```bash
+# On the simulator host:
+cd /opt/ella-sim/sim
+docker compose logs gnb | grep -i "NG Setup"     # gNodeB registered with the AMF
+docker compose run --rm ue                        # UE registers + PDU session
+ping -I uesimtun0 -c 4 8.8.8.8                     # UE data plane out via ella-core NAT
+```
+
 ## Agent tools (MCP)
 
-The MCP server (`agent/ella_mcp_server.py`) exposes five tools over the standard
+The MCP server (`agent/ella_mcp_server.py`) exposes six tools over the standard
 MCP stdio transport:
 
 | Tool | Purpose |
@@ -54,6 +80,7 @@ MCP stdio transport:
 | `restart_core_service()` | Graceful container restart (self-healing) |
 | `evaluate_well_architected()` | Live 6-pillar posture checks (cost / reliability / security / performance) |
 | `apply_remediation(action_type)` | `clear_logs`, `restart_container`, `flush_stale_iptables`; destructive actions are HITL-gated |
+| `run_e2e_attach_test()` | Verify RAN/UE attach: core up + N2 (NGAP) association + N3 (GTP-U) tunnel(s) |
 
 ### Memory tiers (SQLite at `/var/lib/ella-agent/memory.db`)
 - `session_memory` — short-term tool executions & events

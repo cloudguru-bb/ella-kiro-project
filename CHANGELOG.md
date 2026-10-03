@@ -1,5 +1,41 @@
 # Changelog
 
+## RAN/UE simulator on a dedicated host
+
+Added full end-to-end simulation: a **second Free-Tier EC2 instance** running the
+UERANSIM gNodeB + UE via Docker, attaching to ella-core for both control plane
+(N2/NGAP) and user plane (N3/GTP-U) with internet egress through ella-core's NAT.
+
+### New `sim/` module
+- `sim/docker-compose.yml` — UERANSIM gNodeB + UE (`gradiant/ueransim:3.2.6`),
+  host networking, TUN device for the UE's `uesimtun0` interface.
+- `sim/gnb.yaml.tmpl` / `sim/ue.yaml.tmpl` — configs templated with the core/host
+  IPs at boot; PLMN 999/70, TAC 1, slice SST 1/SD 000001, and IMSI/Ki/OPc matched
+  to `provision_subscriber()` so attach works out of the box.
+- `sim/README.md` — end-to-end attach + data-plane (`ping -I uesimtun0`) test guide.
+
+### Infrastructure (`infra/main.tf`)
+- Added a second instance `ran_sim_host`, gated by `var.deploy_simulator` (default
+  true), with its own `var.simulator_instance_type` and a 10 GB root volume (keeps
+  total EBS at 30 GB Free Tier).
+- Added `infra/cloud-init-sim.yaml`; the instance's `user_data` is rendered via
+  `templatefile()` with ella-core's **private** IP so the gNodeB targets the AMF.
+- **Networking:** moved N2/N3 ingress off the SG block into dedicated
+  `aws_security_group_rule` resources scoped to the simulator's SG via
+  `source_security_group_id` — N2/N3 are now reachable **only** from the simulator
+  (private, VPC-internal), not `0.0.0.0/0`.
+- Added a dedicated simulator SG (SSH + egress) and new outputs
+  (`ella_core_private_ip`, `simulator_public_ip`, `simulator_instance_id`).
+
+### Agent (`agent/ella_mcp_server.py`)
+- New MCP tool **`run_e2e_attach_test()`**: from the core host, confirms the core is
+  running, an SCTP association is up on N2 (gNodeB connected), and GTP-U tunnel(s)
+  exist on N3 (UE PDU session) — and records the outcome to topology memory. Makes
+  the end-to-end simulation part of the agentic lifecycle. (Tool count: 5 → 6.)
+
+### Docs
+- Added TUTORIAL Module 6b and TEST_CASES Suite H for the simulator.
+
 ## Agentic lifecycle completion
 
 Restructured the flat repo into the spec's `/infra`, `/app`, `/agent` layout and

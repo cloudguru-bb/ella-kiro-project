@@ -65,7 +65,7 @@ Run commands from the **repo root** unless a step says otherwise.
 | **ENV** | Local |
 | **Objective** | All five tools execute cleanly with no live side-effects. |
 | **Steps** | `python agent/ella_mcp_server.py --test` |
-| **Expected Result** | Output ends with `All tools executed cleanly.`; **8** `[PASS]` lines; exit code 0 (`echo $?`). A `[dry-run] Telegram alert suppressed` line appears (proving no live alerts). |
+| **Expected Result** | Output ends with `All tools executed cleanly.`; **9** `[PASS]` lines; exit code 0 (`echo $?`). A `[dry-run] Telegram alert suppressed` line appears (proving no live alerts). |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ### TC-B2 — Self-test exits non-zero on failure (negative/meta test)
@@ -84,7 +84,7 @@ Run commands from the **repo root** unless a step says otherwise.
 | **Objective** | An MCP client can connect, discover, and call tools over stdio. |
 | **Preconditions** | Create `mcp_demo.py` from TUTORIAL §2.2. |
 | **Steps** | `python mcp_demo.py` |
-| **Expected Result** | Prints exactly these 5 tool names: `apply_remediation, evaluate_well_architected, get_cellular_status, provision_subscriber, restart_core_service`; then two JSON tool results. |
+| **Expected Result** | Prints exactly these 6 tool names: `apply_remediation, evaluate_well_architected, get_cellular_status, provision_subscriber, restart_core_service, run_e2e_attach_test`; then two JSON tool results. |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ### TC-B4 — `get_cellular_status` returns a structured report
@@ -323,7 +323,79 @@ Run commands from the **repo root** unless a step says otherwise.
 |---|---|
 | **ENV** | Cloud |
 | **Steps** | `cd infra && terraform destroy`, then verify in AWS console. |
-| **Expected Result** | EC2 instance, Elastic IP, and VPC are destroyed; no lingering billable resources. |
+| **Expected Result** | **Both** EC2 instances, the Elastic IP, and the VPC are destroyed; no lingering billable resources. |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+---
+
+## Suite H — End-to-end RAN/UE simulation (Cloud; needs `deploy_simulator=true`) — OPTIONAL
+
+> ⚠️ Requires both hosts deployed. Run from the **simulator** host unless noted.
+
+### TC-H1 — New e2e tool is registered and callable
+| | |
+|---|---|
+| **ENV** | Local |
+| **Objective** | The `run_e2e_attach_test` MCP tool exists and returns a structured result. |
+| **Steps** | `python -c "import json,ella_mcp_server as e; r=e._run_e2e_attach_test(); print(sorted(r.keys()))"` |
+| **Expected Result** | Keys include `attached`, `core_running`, `n2_association_up`, `n3_gtpu_tunnels`. (Off-AWS, all false/0 — acceptable; we're testing the tool contract.) |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H2 — Both hosts deploy; private IP wired into the sim
+| | |
+|---|---|
+| **ENV** | Cloud |
+| **Steps** | `cd infra && terraform output` |
+| **Expected Result** | `simulator_public_ip` and `ella_core_private_ip` are non-null. On the sim host, `cat /opt/ella-sim/sim/gnb.yaml` shows the real core IP under `amfConfigs` (no `__ELLA_CORE_IP__` left). |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H3 — Private N2/N3 reachability (not public)
+| | |
+|---|---|
+| **ENV** | Cloud (sim host) |
+| **Objective** | Simulator reaches the core privately; the world cannot. |
+| **Steps** | 1. On sim host: `nc -vz -u $ELLA_CORE_IP 2152` (load `ELLA_CORE_IP` from `/opt/ella-sim/ella_core_ip.env`).<br>2. From your laptop: attempt the same against the core's **public** IP. |
+| **Expected Result** | Step 1 reaches the core (private path works). Step 2 is blocked/filtered (N2/N3 are scoped to the sim SG, not `0.0.0.0/0`). |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H4 — Subscriber provisioned on the core
+| | |
+|---|---|
+| **ENV** | Cloud (core host) |
+| **Steps** | Call `provision_subscriber()` (defaults) via an MCP client or the tool directly. |
+| **Expected Result** | `success` is `True` for IMSI `999700000000001`. |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H5 — gNodeB registers (control plane, N2)
+| | |
+|---|---|
+| **ENV** | Cloud (sim host) |
+| **Steps** | `cd /opt/ella-sim/sim && docker compose logs gnb | grep -i "NG Setup"` |
+| **Expected Result** | Log shows an NG Setup / NGAP association success with the AMF. |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H6 — UE attaches and gets a PDU session (user plane)
+| | |
+|---|---|
+| **ENV** | Cloud (sim host) |
+| **Steps** | `docker compose run --rm ue` (watch logs), then in another shell `ip addr show uesimtun0`. |
+| **Expected Result** | Logs show `PDU Session establishment is successful`; `uesimtun0` exists with an IP from the UE subnet (`10.45.0.x`). |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H7 — UE reaches the internet THROUGH ella-core (the payoff)
+| | |
+|---|---|
+| **ENV** | Cloud (sim host) |
+| **Steps** | `ping -I uesimtun0 -c 4 8.8.8.8` and `curl --interface uesimtun0 -s https://checkip.amazonaws.com` |
+| **Expected Result** | Ping replies received; curl returns an IP (ella-core's public/NAT egress IP), proving full data-plane connectivity. |
+| **Result** | ☐ PASS ☐ FAIL — date: ______ |
+
+### TC-H8 — Agent confirms the attach end-to-end
+| | |
+|---|---|
+| **ENV** | Cloud (core host) |
+| **Steps** | Call `run_e2e_attach_test()` while the UE is attached. |
+| **Expected Result** | `attached` is `True`; `n2_association_up` is `True`; `n3_gtpu_tunnels` ≥ 1. |
 | **Result** | ☐ PASS ☐ FAIL — date: ______ |
 
 ---
@@ -339,6 +411,7 @@ Run commands from the **repo root** unless a step says otherwise.
 | E — Healing/guardrails | 6 | | | |
 | F — IaC validation | 5 | | | |
 | G — Live deploy (optional) | 6 | | | |
-| **Total** | **31** | | | |
+| H — End-to-end RAN/UE (optional) | 8 | | | |
+| **Total** | **39** | | | |
 
 **Tester:** ___________________  **Date:** ___________  **Build/commit:** ___________

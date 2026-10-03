@@ -1,0 +1,55 @@
+# UERANSIM UE config (template).
+# __GNB_IP__ is substituted at boot by cloud-init-sim.yaml.
+#
+# Credentials MUST match a subscriber provisioned into ella-core. These values
+# are the defaults used by the agent's provision_subscriber() tool:
+#   IMSI 999700000000001, Ki 465B..., OPc E8ED..., slice SST 1 / SD 000001.
+# Run the agent tool (or MCP call) to provision this subscriber before attaching.
+
+supi: 'imsi-999700000000001'   # IMSI = MCC(999) + MNC(70) + MSIN
+mcc: '999'
+mnc: '70'
+protectionScheme: 0            # null-scheme (no SUPI concealment) for the lab
+
+# Authentication keys — must match the subscriber record in ella-core.
+key: '465B5CE8B199B49FAA5F0A2EE238A6BC'
+op:  'E8ED289DEBA952E4283B54E88E6183CA'
+opType: 'OPC'                  # OPc is supplied directly (not OP)
+amf: '8000'
+imei: '356938035643803'
+imeiSv: '4370816125816151'
+
+# gNodeB radio-link endpoints the UE will try (this host).
+gnbSearchList:
+  - __GNB_IP__
+
+# Initial PDU session(s) to establish after registration.
+sessions:
+  - type: 'IPv4'
+    apn: 'internet'
+    slice:
+      sst: 1
+      sd: 0x000001
+
+# Configured S-NSSAIs (must match the gNodeB slices + subscriber slice).
+configured-nssai:
+  - sst: 1
+    sd: 0x000001
+
+default-nssai:
+  - sst: 1
+    sd: 1
+
+# DNS/behavior for the UE's data-plane interface (uesimtun0).
+integrity:
+  IA1: true
+  IA2: true
+  IA3: true
+ciphering:
+  EA1: true
+  EA2: true
+  EA3: true
+
+integrityMaxRate:
+  uplink: 'full'
+  downlink: 'full'

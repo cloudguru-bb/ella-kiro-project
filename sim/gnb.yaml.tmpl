@@ -1,0 +1,27 @@
+# UERANSIM gNodeB config (template).
+# __ELLA_CORE_IP__ and __GNB_IP__ are substituted at boot by cloud-init-sim.yaml.
+# PLMN / TAC / slice values MUST match ella-core (see app/ella-core.yaml) and the
+# subscriber provisioned via the agent (provision_subscriber defaults).
+
+mcc: '999'          # Mobile Country Code (matches ella-core MCC)
+mnc: '70'           # Mobile Network Code (matches ella-core MNC)
+
+nci: '0x000000010'  # NR Cell Identity (36-bit)
+idLength: 32        # NR gNB ID length in bits [22..32]
+tac: 1              # Tracking Area Code (matches ella-core TAC)
+
+linkIp: __GNB_IP__  # gNB's local IP for radio link to UEs (this host)
+ngapIp: __GNB_IP__  # gNB's local IP for N2 (NGAP/SCTP toward the AMF)
+gtpIp: __GNB_IP__   # gNB's local IP for N3 (GTP-U user plane)
+
+# AMF (ella-core) address list — reached privately inside the VPC.
+amfConfigs:
+  - address: __ELLA_CORE_IP__
+    port: 38412
+
+# Supported Tracking Areas / slices (S-NSSAI). Must match the subscriber's slice.
+slices:
+  - sst: 1
+    sd: 0x000001
+
+ignoreStreamIds: true
