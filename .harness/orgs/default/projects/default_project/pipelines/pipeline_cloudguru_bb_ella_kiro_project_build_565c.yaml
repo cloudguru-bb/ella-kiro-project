@@ -2,6 +2,15 @@ pipeline:
   id: pipeline_cloudguru_bb_ella_kiro_project_build_565c
   name: pipeline_cloudguru_bb_ella_kiro_project_build_565c
   description: Builds and tests the Ella MCP server, scans it for vulnerabilities, publishes the image to Harness Artifact Registry, and generates an SBOM.
+  notifications:
+    - id: notify_on_failure
+      name: Notify on pipeline failure
+      on:
+        - pipeline: failed
+      uses: email
+      with:
+        recipients:
+          - brianlbaird@gmail.com
   stages:
     - id: build_and_test
       name: Build and Test
@@ -11,22 +20,17 @@ pipeline:
       cache:
         enabled: true
       steps:
-        - id: install_deps
-          name: Install Dependencies
+        - id: install_and_test
+          name: Install Dependencies and Run Tests
           run:
+            container:
+              image: python:3.12
             shell: bash
             script: |-
               cd agent
-              python3 -m pip install --user -r requirements.txt
-          timeout: 5m
-        - id: test
-          name: Run Tests
-          run:
-            shell: bash
-            script: |-
-              cd agent
+              python3 -m pip install -r requirements.txt
               python3 ella_mcp_server.py --test
-          timeout: 10m
+          timeout: 15m
         - id: bandit_scan
           name: Bandit Security Scan
           sto:
@@ -40,6 +44,7 @@ pipeline:
               package_name: bb-ella-mcp-server
               tags:
                 - ella-core
+                - ${{ codebase.commitSha }}
         - id: generate_sbom
           name: Generate SBOM
           template:
