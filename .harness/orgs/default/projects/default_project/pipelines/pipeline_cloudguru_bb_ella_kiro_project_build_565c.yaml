@@ -1,0 +1,30 @@
+pipeline:
+  id: pipeline_cloudguru_bb_ella_kiro_project_build_565c
+  name: pipeline_cloudguru_bb_ella_kiro_project_build_565c
+  stages:
+    - id: build_and_test
+      name: Build and Test
+      runtime: cloud
+      clone:
+        enabled: true
+      cache:
+        enabled: true
+      steps:
+        - id: install_deps
+          name: Install Dependencies
+          run:
+            shell: bash
+            script: |-
+              cd agent
+              python3 -m pip install --user -r requirements.txt
+          timeout: 5m
+        - id: test
+          name: Run Tests
+          run:
+            shell: bash
+            script: |-
+              cd agent
+              python3 ella_mcp_server.py --test
+          timeout: 10m
+  tags:
+    onboarding: "true"
